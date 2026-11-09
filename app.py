@@ -6,6 +6,10 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env", override=True)
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 import tempfile
@@ -19,7 +23,7 @@ from urllib.request import Request, urlopen
 from urllib.parse import quote_plus
 
 import streamlit as st
-import ollama
+from groq import Groq
 from tavily import TavilyClient
 
 
@@ -214,6 +218,17 @@ footer { visibility: hidden; }
 # ============================================================
 # 2. HELPERS AND SESSION STATE
 # ============================================================
+def ask_groq(messages, temperature=0.2):
+    if groq_client is None:
+        raise ValueError("GROQ_API_KEY is not configured.")
+
+    response = groq_client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=messages,
+        temperature=temperature,
+    )
+
+    return response.choices[0].message.content or ""
 def prepare_chunks(chunks, source_name, source_type, source_id=None):
     """Attach source metadata and unique IDs to each chunk."""
     source_id = source_id or str(uuid.uuid4())
@@ -260,32 +275,30 @@ def make_standalone_question(question):
         return question
 
     try:
-        response = ollama.chat(
-            model="llama3.2",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
+      rewritten = ask_groq(
+    [
+        {
+            "role": "system",
+            "content": (
+                "Rewrite the latest user question as one standalone search query.\n"
+                "Use the recent conversation to identify the exact subject of a follow-up.\n"
+                "If the latest question says 'it', 'they', 'there', 'when was it established', "
+                "or uses similar incomplete wording, resolve it using the most recent relevant subject.\n"
+                "Do not switch to an older topic when the latest discussion identifies a newer subject.\n"
+                "Correct obvious spelling mistakes without changing the user's intent.\n"
+                "Do not answer the question and do not add facts.\n"
+                "Return only the rewritten question."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Recent conversation:\n{history}\n\nLatest question:\n{question}",
+        },
+    ],
+    temperature=0,
+)
 
-"Rewrite the latest user question as one standalone search query.\n"
-"Use the recent conversation to identify the exact subject of a follow-up.\n"
-"If the latest question says 'it', 'they', 'there', 'when was it established', "
-"or uses similar incomplete wording, resolve it using the most recent relevant subject.\n"
-"Do not switch to an older topic when the latest discussion identifies a newer subject.\n"
-"Correct obvious spelling mistakes without changing the user's intent.\n"
-"Do not answer the question and do not add facts.\n"
-"Return only the rewritten question."
-
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"Recent conversation:\n{history}\n\nLatest question:\n{question}",
-                },
-            ],
-            options={"temperature": 0},
-        )
-        rewritten = (response.message.content or "").strip().strip('"')
+rewritten = rewritten.strip().strip('"')
         if rewritten and len(rewritten) < 500:
             return rewritten
     except Exception:
@@ -565,12 +578,11 @@ def extract_map_location(question, context):
     if not context.strip():
         return None
 
-    response = ollama.chat(
-        model="llama3.2",
-        messages=[
-            {
-                "role": "system",
-                "content": """
+   location = ask_groq(
+    [
+        {
+            "role": "system",
+            "content": """
 Extract the company name or physical address relevant to the
 user's location question from the supplied context.
 
@@ -579,19 +591,17 @@ Never return a website URL.
 Do not invent a location.
 If no location is found, return NONE.
 """,
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Question: {question}\n\n"
-                    f"Document and website content:\n{context}"
-                ),
-            },
-        ],
-        options={"temperature": 0},
-    )
-
-    location = response.message.content.strip().strip('"').strip("'")
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Question: {question}\n\n"
+                f"Document and website content:\n{context}"
+            ),
+        },
+    ],
+    temperature=0,
+).strip().strip('"').strip("'")
 
     if not location or location.upper() == "NONE":
         return None
@@ -1123,19 +1133,13 @@ COMBINED LOCAL AND WEB SEARCH RESULTS:
 Answer using the available evidence. Do not invent missing information.
 """
 
-                        response = ollama.chat(
-                            model="llama3.2",
-                            messages=[
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": user_prompt},
-                            ],
-                            options={"temperature": 0.2},
-                        )
-
-                        answer = (
-                            response.message.content
-                            or "No answer was generated."
-                        )
+                        answer = ask_groq(
+    [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ],
+    temperature=0.2,
+) or "No answer was generated."
 
                         # Preserve the existing Google Maps response behavior.
                         if is_map_request(question):
