@@ -1,7 +1,7 @@
 
 streamlit
 python-dotenv
-ollama
+groq
 tavily-python
 langchain-community
 langchain-text-splitters
