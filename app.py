@@ -297,7 +297,6 @@ def make_standalone_question(question):
     ],
     temperature=0,
 )
-
         rewritten = rewritten.strip().strip('"')
 
         if rewritten and len(rewritten) < 500:
