@@ -269,35 +269,41 @@ def get_recent_conversation():
 
 
 def make_standalone_question(question):
-    """Resolve follow-up questions using the recent conversation."""
-    history = get_recent_conversation()
-    if not history:
+    if not st.session_state.messages:
         return question
 
+    history = "\n".join(
+        [
+            f"{message['role']}: {message['content']}"
+            for message in st.session_state.messages[-6:]
+        ]
+    )
+
     try:
-      rewritten = ask_groq(
-    [
-        {
-            "role": "system",
-            "content": (
-                "Rewrite the latest user question as one standalone search query.\n"
-                "Use the recent conversation to identify the exact subject of a follow-up.\n"
-                "If the latest question says 'it', 'they', 'there', 'when was it established', "
-                "or uses similar incomplete wording, resolve it using the most recent relevant subject.\n"
-                "Do not switch to an older topic when the latest discussion identifies a newer subject.\n"
-                "Correct obvious spelling mistakes without changing the user's intent.\n"
-                "Do not answer the question and do not add facts.\n"
-                "Return only the rewritten question."
-            ),
-        },
-        {
-            "role": "user",
-            "content": f"Recent conversation:\n{history}\n\nLatest question:\n{question}",
-        },
-    ],
-    temperature=0,
-)
-         rewritten = rewritten.strip().strip('"')
+        rewritten = ask_groq(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the latest user question as one standalone search query.\n"
+                        "Use the recent conversation to identify the exact subject of a follow-up.\n"
+                        "If the latest question says 'it', 'they', 'there', or uses similar incomplete wording, "
+                        "resolve it using the most recent relevant subject.\n"
+                        "Do not switch to an older topic when the latest discussion identifies a newer subject.\n"
+                        "Correct obvious spelling mistakes without changing the user's intent.\n"
+                        "Do not answer the question and do not add facts.\n"
+                        "Return only the rewritten question."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Recent conversation:\n{history}\n\nLatest question:\n{question}",
+                },
+            ],
+            temperature=0,
+        )
+
+        rewritten = rewritten.strip().strip('"')
 
         if rewritten and len(rewritten) < 500:
             return rewritten
