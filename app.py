@@ -590,6 +590,10 @@ def extract_map_location(question, context):
     if not context.strip():
         return None
 
+def extract_map_location(question, context):
+    if not context.strip():
+        return None
+
     location = ask_groq(
         [
             {
