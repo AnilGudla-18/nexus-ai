@@ -298,11 +298,14 @@ def make_standalone_question(question):
     temperature=0,
 )
 
-rewritten = rewritten.strip().strip('"')
+        rewritten = rewritten.strip().strip('"')
+
         if rewritten and len(rewritten) < 500:
             return rewritten
+
     except Exception:
         pass
+
     return question
 
 
