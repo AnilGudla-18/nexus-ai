@@ -10,4 +10,3 @@ sentence-transformers
 pypdf
 docx2txt
 tavily-python
-Groq
