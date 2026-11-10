@@ -586,7 +586,7 @@ def extract_map_location(question, context):
     if not context.strip():
         return None
 
-   location = ask_groq(
+    location = ask_groq(
     [
         {
             "role": "system",
