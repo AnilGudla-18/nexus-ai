@@ -72,6 +72,15 @@ st.markdown("""
     --blue: #087cff;
     --cyan: #12c7f4;
     --green: #35e0b0;
+    [theme]
+base = "dark"
+primaryColor = "#8B5CF6"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#161B22"
+textColor = "#FFFFFF"
+
+[server]
+enableCORS = false
 }
 .stApp {
     background: radial-gradient(ellipse at 48% 20%, #0b1b37 0%, #050e20 68%);
