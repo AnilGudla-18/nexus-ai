@@ -586,14 +586,6 @@ def extract_map_location(question, context):
     if not context.strip():
         return None
 
-  def extract_map_location(question, context):
-    if not context.strip():
-        return None
-
-def extract_map_location(question, context):
-    if not context.strip():
-        return None
-
     location = ask_groq(
         [
             {
@@ -626,6 +618,9 @@ If no location is found, return NONE.
         return None
 
     return location
+
+
+with st.sidebar:
 with st.sidebar:
     st.markdown(
         '<div style="display:flex;align-items:center;gap:5px;">'
