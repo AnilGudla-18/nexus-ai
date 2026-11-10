@@ -621,7 +621,6 @@ If no location is found, return NONE.
 
 
 with st.sidebar:
-with st.sidebar:
     st.markdown(
         '<div style="display:flex;align-items:center;gap:5px;">'
         '<div style="font-size:2.1rem;">🤖</div>'
