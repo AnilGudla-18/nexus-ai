@@ -586,11 +586,15 @@ def extract_map_location(question, context):
     if not context.strip():
         return None
 
-   location = ask_groq(
-    [
-        {
-            "role": "system",
-            "content": """
+  def extract_map_location(question, context):
+    if not context.strip():
+        return None
+
+    location = ask_groq(
+        [
+            {
+                "role": "system",
+                "content": """
 Extract the company name or physical address relevant to the
 user's location question from the supplied context.
 
@@ -599,17 +603,17 @@ Never return a website URL.
 Do not invent a location.
 If no location is found, return NONE.
 """,
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Question: {question}\n\n"
-                f"Document and website content:\n{context}"
-            ),
-        },
-    ],
-    temperature=0,
-).strip().strip('"').strip("'")
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question: {question}\n\n"
+                    f"Document and website content:\n{context}"
+                ),
+            },
+        ],
+        temperature=0,
+    ).strip().strip('"').strip("'")
 
     if not location or location.upper() == "NONE":
         return None
