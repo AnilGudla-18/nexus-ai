@@ -15,7 +15,7 @@ TAVILY_API_KEY = st.secrets.get(
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-120b"
 
 # TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 import tempfile
