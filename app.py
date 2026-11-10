@@ -1,14 +1,20 @@
-from dotenv import load_dotenv
 from pathlib import Path
 import os
+import streamlit as st
+from groq import Groq
 
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env", override=True)
 
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_API_KEY = st.secrets.get(
+    "GROQ_API_KEY", os.getenv("GROQ_API_KEY", "")
+).strip()
+
+TAVILY_API_KEY = st.secrets.get(
+    "TAVILY_API_KEY", os.getenv("TAVILY_API_KEY", "")
+).strip()
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
 # TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
