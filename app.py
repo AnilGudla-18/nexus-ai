@@ -1104,8 +1104,8 @@ with main_col:
             for message in st.session_state.messages:
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
-                   if message["role"] == "assistant" and message.get("audio"):
-                       render_speaker_button(message["audio"], f"history-{idx}")
+                    if message["role"] == "assistant" and message.get("audio"):
+                        render_speaker_button(message["audio"], f"history-{idx}")
 
                     # if message.get("sources"):
                     #     with st.expander("View source pages"):
