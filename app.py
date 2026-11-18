@@ -1,7 +1,9 @@
 from pathlib import Path
 import os
+import asyncio
 import streamlit as st
 from groq import Groq
+import edge_tts
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -72,15 +74,6 @@ st.markdown("""
     --blue: #087cff;
     --cyan: #12c7f4;
     --green: #35e0b0;
-    [theme]
-base = "dark"
-primaryColor = "#8B5CF6"
-backgroundColor = "#0E1117"
-secondaryBackgroundColor = "#161B22"
-textColor = "#FFFFFF"
-
-[server]
-enableCORS = false
 }
 .stApp {
     background: radial-gradient(ellipse at 48% 20%, #0b1b37 0%, #050e20 68%);
@@ -226,6 +219,15 @@ div[data-testid="stAlert"] { border-radius: 12px; }
 .file-meta { color: #8daee8; font-size: .76rem; }
 .online { color: #35e0b0; font-size: .8rem; }
 footer { visibility: hidden; }
+/* Hide Streamlit deployment toolbar and GitHub badge */
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+.viewerBadge_container__1QSob {
+    display: none !important;
+    visibility: hidden !important;
+}
+#MainMenu { visibility: hidden !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -244,6 +246,38 @@ def ask_groq(messages, temperature=0.2):
     )
 
     return response.choices[0].message.content or ""
+
+
+def make_speech_audio(text):
+    """Convert an assistant answer to MP3 audio using Edge TTS."""
+    async def create_audio(path):
+        communicate = edge_tts.Communicate(text, voice="en-US-AriaNeural")
+        await communicate.save(path)
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_file:
+        audio_path = audio_file.name
+    try:
+        asyncio.run(create_audio(audio_path))
+        with open(audio_path, "rb") as audio_file:
+            return audio_file.read()
+    finally:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+
+
+def transcribe_voice(audio_file):
+    """Convert a recorded voice question to text with Groq Whisper."""
+    if groq_client is None:
+        raise ValueError("GROQ_API_KEY is not configured.")
+    result = groq_client.audio.transcriptions.create(
+        model="whisper-large-v3-turbo",
+        file=(audio_file.name, audio_file.getvalue()),
+        response_format="json",
+    )
+    return (result.text or "").strip()
+
+
 def prepare_chunks(chunks, source_name, source_type, source_id=None):
     """Attach source metadata and unique IDs to each chunk."""
     source_id = source_id or str(uuid.uuid4())
@@ -541,6 +575,10 @@ if "active_nav" not in st.session_state:
     st.session_state.active_nav = "AI Chat"
 if "show_knowledge_panel" not in st.session_state:
     st.session_state.show_knowledge_panel = False
+if "voice_input_key" not in st.session_state:
+    st.session_state.voice_input_key = 0
+if "last_voice_signature" not in st.session_state:
+    st.session_state.last_voice_signature = None
 
 # Load the persistent Chroma collection after restart.
 if st.session_state.vector_store is None and os.path.isdir(CHROMA_DIR):
@@ -977,15 +1015,19 @@ with main_col:
                 )
 
         else:
-            for message in st.session_state.messages:
+            for message_index, message in enumerate(st.session_state.messages):
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
 
-                    # if message.get("sources"):
-                    #     with st.expander("View source pages"):
-                    #         for source in message["sources"]:
-                    #             st.markdown(f"**PDF page {source['page']}**")
-                    #             st.write(source["text"])
+                    if message["role"] == "assistant":
+                        if st.button("🔊 Listen to answer", key=f"speak_answer_{message_index}"):
+                            try:
+                                with st.spinner("Preparing voice answer..."):
+                                    message["audio_bytes"] = make_speech_audio(message["content"])
+                            except Exception as error:
+                                st.error(f"Voice output failed: {error}")
+                        if message.get("audio_bytes"):
+                            st.audio(message["audio_bytes"], format="audio/mp3")
 
         st.markdown(
             '<div style="text-align:center;color:#7695c8;'
@@ -995,10 +1037,29 @@ with main_col:
             unsafe_allow_html=True,
         )
 
+        voice_audio = st.audio_input(
+            "🎙️ Record your question",
+            key=f"voice_input_{st.session_state.voice_input_key}",
+        )
+
         question = st.chat_input(
             "Ask NEXUS AI anything...",
             disabled=False,
         )
+
+        # If the user records a voice question, transcribe it and send it
+        # through the same RAG + web-search conversation pipeline.
+        if voice_audio is not None:
+            voice_signature = hashlib.sha256(voice_audio.getvalue()).hexdigest()
+            if voice_signature != st.session_state.last_voice_signature:
+                try:
+                    with st.spinner("Transcribing your voice question..."):
+                        question = transcribe_voice(voice_audio)
+                    st.session_state.last_voice_signature = voice_signature
+                    st.session_state.voice_input_key += 1
+                except Exception as error:
+                    st.error(f"Voice input failed: {error}")
+                    question = None
 
         # if st.session_state.vector_store is not None:
         #     st.caption(f"🟢 Knowledge base ready · {len(get_sources())} source(s)")
@@ -1201,18 +1262,20 @@ Answer using the available evidence. Do not invent missing information.
                         if web_error:
                             st.caption(f"Web search note: {web_error}")
 
-                    # Display only the final AI answer.
-                    st.markdown(answer)
-
-                    # Save answer to chat history.
+                    # Save the answer. Rerun so the complete conversation is
+                    # rendered in order and the composer remains below it.
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": answer,
                         "sources": sources_for_answer,
                     })
+                    st.rerun()
 
 
 
                 except Exception as error:
-                    st.error(f"Could not generate the answer: {error}")
-
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": f"I couldn't generate the answer: {error}",
+                    })
+                    st.rerun()
