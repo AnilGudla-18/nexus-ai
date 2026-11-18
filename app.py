@@ -1101,7 +1101,7 @@ with main_col:
                 )
 
         else:
-            for message in st.session_state.messages:
+            for idx, message in enumerate(st.session_state.messages):
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
                     if message["role"] == "assistant" and message.get("audio"):
