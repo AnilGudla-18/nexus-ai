@@ -2,129 +2,262 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <style>
-        body {
-            margin: 0;
-            background: transparent;
-            font-family: Arial, sans-serif;
-        }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
 
-        .composer {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px;
-            border: 1px solid #555;
-            border-radius: 18px;
-            background: #202020;
-        }
+  <style>
+    * { box-sizing: border-box; }
 
-        input {
-            flex: 1;
-            min-width: 0;
-            padding: 10px;
-            color: white;
-            background: transparent;
-            border: none;
-            outline: none;
-            font-size: 15px;
-        }
+    body {
+      margin: 0;
+      padding: 4px 0;
+      background: transparent;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
 
-        button {
-            border: none;
-            cursor: pointer;
-            border-radius: 50%;
-            padding: 10px;
-            color: white;
-            background: #333;
-            font-size: 18px;
-        }
+    .bar {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 7px 9px 7px 16px;
+      min-height: 56px;
+      border: 1px solid #244875;
+      border-radius: 18px;
+      background: #091a33;
+    }
 
-        button.send {
-            background: #1685e8;
-        }
+    textarea {
+      flex: 1;
+      min-width: 0;
+      height: 38px;
+      max-height: 100px;
+      resize: none;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: white;
+      font-size: 15px;
+      font-family: inherit;
+      padding: 9px 0;
+    }
 
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-    </style>
+    textarea::placeholder { color: #8daee8; }
+
+    button {
+      border: none;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .mic {
+      width: 39px;
+      height: 39px;
+      border-radius: 50%;
+      background: #142d50;
+      color: white;
+      font-size: 18px;
+    }
+
+    .mic.recording {
+      background: #a52638;
+    }
+
+    .send {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #1684f8;
+      color: white;
+      font-size: 23px;
+    }
+
+    .status {
+      min-height: 17px;
+      padding: 3px 10px;
+      color: #8daee8;
+      font-size: 11px;
+    }
+  </style>
 </head>
+
 <body>
-    <div class="composer">
-        <input id="question" placeholder="Ask NEXUS AI anything..." />
-        <button id="mic" title="Speak">🎙️</button>
-        <button id="send" class="send" title="Send">➤</button>
-    </div>
 
-    <script>
-        const Streamlit = window.parent.Streamlit;
-        const input = document.getElementById("question");
-        const mic = document.getElementById("mic");
-        const send = document.getElementById("send");
+  <div class="bar">
+    <textarea
+      id="message"
+      rows="1"
+      placeholder="Ask NEXUS AI anything..."
+    ></textarea>
 
-        function sendQuestion() {
-            const value = input.value.trim();
-            if (!value) return;
+    <button id="mic" class="mic" title="Record voice">🎙</button>
 
-            Streamlit.setComponentValue({
-                type: "text",
-                text: value
-            });
-            input.value = "";
+    <button id="send" class="send" title="Send">↑</button>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <script>
+    const input = document.getElementById("message");
+    const mic = document.getElementById("mic");
+    const send = document.getElementById("send");
+    const status = document.getElementById("status");
+
+    let recorder = null;
+    let stream = null;
+    let chunks = [];
+
+    function sendToStreamlit(type, value) {
+      window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: type,
+        ...value
+      }, "*");
+    }
+
+    function resize() {
+      input.style.height = "38px";
+      input.style.height =
+        Math.min(input.scrollHeight, 100) + "px";
+
+      sendToStreamlit("streamlit:setFrameHeight", {
+        height: 85
+      });
+    }
+
+    function submitText() {
+      const text = input.value.trim();
+
+      if (!text) return;
+
+      sendToStreamlit("streamlit:setComponentValue", {
+        value: {
+          kind: "text",
+          text: text,
+          nonce: Date.now()
         }
+      });
 
-        send.addEventListener("click", sendQuestion);
+      input.value = "";
+      resize();
+    }
 
-        input.addEventListener("keydown", event => {
-            if (event.key === "Enter") {
-                event.preventDefault();
-                sendQuestion();
-            }
+    send.addEventListener("click", submitText);
+
+    input.addEventListener("input", resize);
+
+    input.addEventListener("keydown", function(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        submitText();
+      }
+    });
+
+    mic.addEventListener("click", async function() {
+
+      if (recorder && recorder.state === "recording") {
+        recorder.stop();
+        mic.textContent = "🎙";
+        mic.classList.remove("recording");
+        status.textContent = "Processing voice...";
+        return;
+      }
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: true
         });
 
-        const SpeechRecognition =
-            window.SpeechRecognition ||
-            window.webkitSpeechRecognition;
+        chunks = [];
 
-        if (SpeechRecognition) {
-            const recognition = new SpeechRecognition();
-            recognition.continuous = false;
-            recognition.interimResults = false;
+        const mime = MediaRecorder.isTypeSupported(
+          "audio/webm;codecs=opus"
+        ) ? "audio/webm;codecs=opus" : "audio/webm";
 
-            recognition.onresult = event => {
-                const transcript =
-                    event.results[0][0].transcript;
+        recorder = new MediaRecorder(stream, {
+          mimeType: mime
+        });
 
-                input.value = transcript;
-                sendQuestion();
-            };
+        recorder.ondataavailable = function(e) {
+          if (e.data && e.data.size > 0) {
+            chunks.push(e.data);
+          }
+        };
 
-            recognition.onerror = () => {
-                mic.textContent = "🎙️";
-            };
+        recorder.onstop = function() {
+          const blob = new Blob(chunks, {
+            type: "audio/webm"
+          });
 
-            recognition.onend = () => {
-                mic.textContent = "🎙️";
-            };
+          const reader = new FileReader();
 
-            mic.addEventListener("click", () => {
-                try {
-                    recognition.lang = "en-IN";
-                    mic.textContent = "🔴";
-                    recognition.start();
-                } catch (error) {
-                    mic.textContent = "🎙️";
+          reader.onloadend = function() {
+            const result = String(reader.result || "");
+            const audio = result.split(",")[1] || "";
+
+            if (audio) {
+              sendToStreamlit(
+                "streamlit:setComponentValue",
+                {
+                  value: {
+                    kind: "audio",
+                    audio: audio,
+                    mime: "audio/webm",
+                    nonce: Date.now()
+                  }
                 }
-            });
-        } else {
-            mic.disabled = true;
-            mic.title = "Speech recognition is not supported";
-        }
+              );
 
-        Streamlit.setFrameHeight(65);
-        Streamlit.setComponentReady();
-    </script>
+              status.textContent =
+                "Sending voice for transcription...";
+            }
+          };
+
+          reader.readAsDataURL(blob);
+
+          if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            stream = null;
+          }
+        };
+
+        recorder.start();
+
+        mic.textContent = "■";
+        mic.classList.add("recording");
+
+        status.textContent =
+          "Listening... Click stop when finished.";
+
+      } catch (error) {
+        status.textContent =
+          "Microphone unavailable. Allow microphone permission.";
+      }
+    });
+
+    window.addEventListener("message", function(event) {
+      const data = event.data;
+
+      if (!data || data.type !== "streamlit:render") return;
+
+      const args = data.args || {};
+
+      input.placeholder =
+        args.placeholder || "Ask NEXUS AI anything...";
+
+      send.textContent = "↑";
+      resize();
+    });
+
+    sendToStreamlit("streamlit:componentReady", {
+      apiVersion: 1
+    });
+
+    resize();
+  </script>
+
 </body>
 </html>
