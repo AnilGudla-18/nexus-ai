@@ -12,4 +12,3 @@ pypdf
 docx2txt
 tavily-python
 edge-tts
-streamlit-mic-recorder
