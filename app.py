@@ -158,7 +158,39 @@ def make_speech_audio(text, language_code=None):
             return loop.run_until_complete(_create())
         finally:
             loop.close()
+def render_speaker_button(audio_bytes, key):
+    if not audio_bytes:
+        return
 
+    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+    speaker_html = f"""
+    <div style="background:transparent;">
+        <button id="speaker-{key}" title="Play answer"
+            style="background:transparent;border:0;color:#a9c8ff;
+                   cursor:pointer;padding:5px;border-radius:50%;">
+            <svg width="22" height="22" viewBox="0 0 24 24"
+                 fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+            </svg>
+        </button>
+        <audio id="audio-{key}" src="data:audio/mp3;base64,{audio_b64}"></audio>
+    </div>
+    <script>
+        const button = document.getElementById("speaker-{key}");
+        const audio = document.getElementById("audio-{key}");
+
+        button.addEventListener("click", function() {{
+            audio.currentTime = 0;
+            audio.play();
+        }});
+    </script>
+    """
+
+    st.components.v1.html(speaker_html, height=42, scrolling=False)
 
 # Dark navy / blue UI based on your reference screenshot.
 st.markdown("""
@@ -1072,8 +1104,8 @@ with main_col:
             for message in st.session_state.messages:
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
-                    if message["role"] == "assistant" and message.get("audio"):
-                        st.audio(message["audio"], format="audio/mp3")
+                   if message["role"] == "assistant" and message.get("audio"):
+                       render_speaker_button(message["audio"], f"history-{idx}")
 
                     # if message.get("sources"):
                     #     with st.expander("View source pages"):
@@ -1356,8 +1388,7 @@ Answer using the available evidence. Do not invent missing information.
                     # Display only the final AI answer.
                     st.markdown(answer)
                     if answer_audio:
-                        st.audio(answer_audio, format="audio/mp3")
-
+                        render_speaker_button(answer_audio, "latest-answer")
                     # Save answer and audio in chat history.
                     st.session_state.messages.append({
                         "role": "assistant",
