@@ -1,7 +1,9 @@
 from pathlib import Path
 import os
 import asyncio
+import io
 import streamlit as st
+from streamlit_mic_recorder import mic_recorder
 from groq import Groq
 import edge_tts
 
@@ -248,13 +250,44 @@ def ask_groq(messages, temperature=0.2):
     return response.choices[0].message.content or ""
 
 
-def make_speech_audio(text):
-    """Convert an assistant answer to MP3 audio using Edge TTS."""
+def detect_language_from_text(text):
+    """Best-effort language detection for multilingual text and TTS."""
+    checks = [
+        ("te", r"[\u0c00-\u0c7f]"),  # Telugu
+        ("hi", r"[\u0900-\u097f]"),  # Devanagari (Hindi/Marathi)
+        ("ta", r"[\u0b80-\u0bff]"),  # Tamil
+        ("kn", r"[\u0c80-\u0cff]"),  # Kannada
+        ("ml", r"[\u0d00-\u0d7f]"),  # Malayalam
+        ("bn", r"[\u0980-\u09ff]"),  # Bengali
+        ("gu", r"[\u0a80-\u0aff]"),  # Gujarati
+        ("pa", r"[\u0a00-\u0a7f]"),  # Punjabi
+    ]
+    for code, pattern in checks:
+        if re.search(pattern, text or ""):
+            return code
+    return "en"
+
+
+TTS_VOICES = {
+    "en": "en-US-AriaNeural",
+    "te": "te-IN-ShrutiNeural",
+    "hi": "hi-IN-SwaraNeural",
+    "ta": "ta-IN-PallaviNeural",
+    "kn": "kn-IN-SapnaNeural",
+    "ml": "ml-IN-SobhanaNeural",
+    "bn": "bn-IN-TanishaaNeural",
+    "gu": "gu-IN-DhwaniNeural",
+    "pa": "pa-IN-VaaniNeural",
+}
+
+
+def make_speech_audio(text, language="en"):
+    """Convert an assistant answer to MP3 using a voice for its language."""
     async def create_audio(path):
-        communicate = edge_tts.Communicate(text, voice="en-US-AriaNeural")
+        voice = TTS_VOICES.get(language, TTS_VOICES["en"])
+        communicate = edge_tts.Communicate(text, voice=voice)
         await communicate.save(path)
 
-    import tempfile
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_file:
         audio_path = audio_file.name
     try:
@@ -266,16 +299,25 @@ def make_speech_audio(text):
             os.remove(audio_path)
 
 
-def transcribe_voice(audio_file):
-    """Convert a recorded voice question to text with Groq Whisper."""
+def transcribe_voice(audio_bytes):
+    """Transcribe audio with Whisper and return text plus detected language."""
     if groq_client is None:
         raise ValueError("GROQ_API_KEY is not configured.")
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = "nexus_voice.wav"
     result = groq_client.audio.transcriptions.create(
         model="whisper-large-v3-turbo",
-        file=(audio_file.name, audio_file.getvalue()),
-        response_format="json",
+        file=audio_file,
+        response_format="verbose_json",
     )
-    return (result.text or "").strip()
+    detected = (getattr(result, "language", None) or "english").lower()
+    language_aliases = {
+        "english": "en", "telugu": "te", "hindi": "hi", "tamil": "ta",
+        "kannada": "kn", "malayalam": "ml", "bengali": "bn",
+        "gujarati": "gu", "punjabi": "pa", "marathi": "hi",
+    }
+    language_code = language_aliases.get(detected, detected[:2])
+    return (result.text or "").strip(), language_code
 
 
 def prepare_chunks(chunks, source_name, source_type, source_id=None):
@@ -575,8 +617,6 @@ if "active_nav" not in st.session_state:
     st.session_state.active_nav = "AI Chat"
 if "show_knowledge_panel" not in st.session_state:
     st.session_state.show_knowledge_panel = False
-if "voice_input_key" not in st.session_state:
-    st.session_state.voice_input_key = 0
 if "last_voice_signature" not in st.session_state:
     st.session_state.last_voice_signature = None
 
@@ -1023,7 +1063,9 @@ with main_col:
                         if st.button("🔊 Listen to answer", key=f"speak_answer_{message_index}"):
                             try:
                                 with st.spinner("Preparing voice answer..."):
-                                    message["audio_bytes"] = make_speech_audio(message["content"])
+                                    message["audio_bytes"] = make_speech_audio(
+                                        message["content"], message.get("language", "en")
+                                    )
                             except Exception as error:
                                 st.error(f"Voice output failed: {error}")
                         if message.get("audio_bytes"):
@@ -1037,29 +1079,41 @@ with main_col:
             unsafe_allow_html=True,
         )
 
-        voice_audio = st.audio_input(
-            "🎙️ Record your question",
-            key=f"voice_input_{st.session_state.voice_input_key}",
-        )
+        # One compact composer row: text input + microphone button.
+        # Streamlit's native chat_input does not currently include a microphone,
+        # so mic_recorder supplies the adjacent mic control without a large recorder panel.
+        composer_text, composer_mic = st.columns([0.91, 0.09], vertical_alignment="bottom", gap="small")
+        with composer_text:
+            question = st.chat_input(
+                "Ask NEXUS AI anything...",
+                disabled=False,
+            )
+        with composer_mic:
+            voice_audio = mic_recorder(
+                start_prompt="🎙️",
+                stop_prompt="⏹️",
+                just_once=True,
+                use_container_width=True,
+                format="wav",
+                key="nexus_inline_microphone",
+            )
 
-        question = st.chat_input(
-            "Ask NEXUS AI anything...",
-            disabled=False,
-        )
-
-        # If the user records a voice question, transcribe it and send it
-        # through the same RAG + web-search conversation pipeline.
-        if voice_audio is not None:
-            voice_signature = hashlib.sha256(voice_audio.getvalue()).hexdigest()
+        question_language = "en"
+        # A completed recording is transcribed automatically and sent through
+        # the exact same RAG + Tavily answer pipeline as typed questions.
+        if voice_audio and voice_audio.get("bytes"):
+            voice_signature = hashlib.sha256(voice_audio["bytes"]).hexdigest()
             if voice_signature != st.session_state.last_voice_signature:
                 try:
-                    with st.spinner("Transcribing your voice question..."):
-                        question = transcribe_voice(voice_audio)
+                    with st.spinner("Understanding your voice question..."):
+                        question, question_language = transcribe_voice(voice_audio["bytes"])
                     st.session_state.last_voice_signature = voice_signature
-                    st.session_state.voice_input_key += 1
                 except Exception as error:
                     st.error(f"Voice input failed: {error}")
                     question = None
+
+        if question and question_language == "en":
+            question_language = detect_language_from_text(question)
 
         # if st.session_state.vector_store is not None:
         #     st.caption(f"🟢 Knowledge base ready · {len(get_sources())} source(s)")
@@ -1068,7 +1122,7 @@ with main_col:
 
         if question:
             st.session_state.messages.append(
-                {"role": "user", "content": question}
+                {"role": "user", "content": question, "language": question_language}
             )
 
             with st.chat_message("user"):
@@ -1136,6 +1190,13 @@ with main_col:
 
                         system_prompt = """
 You are a helpful, intelligent, and professional AI assistant.
+
+LANGUAGE RULE: Reply in the same language as the user's latest question. If the
+user asks in Telugu, answer in natural Telugu. If the user asks in Hindi, answer
+in natural Hindi. Do the same for English, Tamil, Kannada, Malayalam, Bengali,
+Gujarati, Punjabi, Marathi, and other languages you understand. Do not switch to
+English unless the user asks for English. Keep names, technical terms, URLs, and
+code unchanged when appropriate.
 
 The application searches BOTH the user's local ChromaDB knowledge base
 and the public web for every question. The supplied context may contain
@@ -1268,6 +1329,7 @@ Answer using the available evidence. Do not invent missing information.
                         "role": "assistant",
                         "content": answer,
                         "sources": sources_for_answer,
+                        "language": question_language,
                     })
                     st.rerun()
 
