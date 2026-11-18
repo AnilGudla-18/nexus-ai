@@ -2,18 +2,12 @@ from pathlib import Path
 import os
 import asyncio
 import io
-import base64
 import streamlit as st
+from streamlit_mic_recorder import mic_recorder
 from groq import Groq
 import edge_tts
 
 BASE_DIR = Path(__file__).resolve().parent
-
-# Custom chat composer: text field, microphone, and send button in one bar.
-nexus_composer = st.components.v1.declare_component(
-    "nexus_composer",
-    path=str(BASE_DIR / "nexus_composer"),
-)
 
 GROQ_API_KEY = st.secrets.get(
     "GROQ_API_KEY", os.getenv("GROQ_API_KEY", "")
@@ -284,23 +278,11 @@ TTS_VOICES = {
     "bn": "bn-IN-TanishaaNeural",
     "gu": "gu-IN-DhwaniNeural",
     "pa": "pa-IN-VaaniNeural",
-    "mr": "mr-IN-AarohiNeural",
 }
 
 
 def make_speech_audio(text, language="en"):
-    """Convert an assistant answer to MP3 using the best matching language voice."""
-    # Prefer the language visible in the generated answer. This also fixes
-    # older chat messages that were saved without language metadata.
-    answer_language = detect_language_from_text(text)
-    if answer_language != "en":
-        # Devanagari is shared by Hindi and Marathi. Preserve Marathi when
-        # Whisper identified it; otherwise use the Hindi voice by default.
-        if answer_language == "hi" and language == "mr":
-            pass
-        else:
-            language = answer_language
-
+    """Convert an assistant answer to MP3 using a voice for its language."""
     async def create_audio(path):
         voice = TTS_VOICES.get(language, TTS_VOICES["en"])
         communicate = edge_tts.Communicate(text, voice=voice)
@@ -317,13 +299,12 @@ def make_speech_audio(text, language="en"):
             os.remove(audio_path)
 
 
-def transcribe_voice(audio_bytes, audio_mime="audio/webm"):
-    """Transcribe browser-recorded audio with Whisper and return text plus language."""
+def transcribe_voice(audio_bytes):
+    """Transcribe audio with Whisper and return text plus detected language."""
     if groq_client is None:
         raise ValueError("GROQ_API_KEY is not configured.")
     audio_file = io.BytesIO(audio_bytes)
-    extension = "ogg" if "ogg" in (audio_mime or "") else "wav" if "wav" in (audio_mime or "") else "webm"
-    audio_file.name = f"nexus_voice.{extension}"
+    audio_file.name = "nexus_voice.wav"
     result = groq_client.audio.transcriptions.create(
         model="whisper-large-v3-turbo",
         file=audio_file,
@@ -333,7 +314,7 @@ def transcribe_voice(audio_bytes, audio_mime="audio/webm"):
     language_aliases = {
         "english": "en", "telugu": "te", "hindi": "hi", "tamil": "ta",
         "kannada": "kn", "malayalam": "ml", "bengali": "bn",
-        "gujarati": "gu", "punjabi": "pa", "marathi": "mr",
+        "gujarati": "gu", "punjabi": "pa", "marathi": "hi",
     }
     language_code = language_aliases.get(detected, detected[:2])
     return (result.text or "").strip(), language_code
@@ -638,8 +619,6 @@ if "show_knowledge_panel" not in st.session_state:
     st.session_state.show_knowledge_panel = False
 if "last_voice_signature" not in st.session_state:
     st.session_state.last_voice_signature = None
-if "last_composer_event_id" not in st.session_state:
-    st.session_state.last_composer_event_id = None
 
 # Load the persistent Chroma collection after restart.
 if st.session_state.vector_store is None and os.path.isdir(CHROMA_DIR):
@@ -1100,39 +1079,41 @@ with main_col:
             unsafe_allow_html=True,
         )
 
-        # One integrated composer: text, microphone, and send are inside one bar.
-        composer_event = nexus_composer(
-            placeholder="Ask NEXUS AI anything...",
-            key="nexus_chat_composer",
-            default=None,
-        )
+        # One compact composer row: text input + microphone button.
+        # Streamlit's native chat_input does not currently include a microphone,
+        # so mic_recorder supplies the adjacent mic control without a large recorder panel.
+        composer_text, composer_mic = st.columns([0.91, 0.09], vertical_alignment="bottom", gap="small")
+        with composer_text:
+            question = st.chat_input(
+                "Ask NEXUS AI anything...",
+                disabled=False,
+            )
+        with composer_mic:
+            voice_audio = mic_recorder(
+                start_prompt="🎙️",
+                stop_prompt="⏹️",
+                just_once=True,
+                use_container_width=True,
+                format="wav",
+                key="nexus_inline_microphone",
+            )
 
-        question = None
         question_language = "en"
-
-        # Process each component event only once, even when Streamlit reruns.
-        if (
-            isinstance(composer_event, dict)
-            and composer_event.get("event_id")
-            and composer_event.get("event_id") != st.session_state.last_composer_event_id
-        ):
-            st.session_state.last_composer_event_id = composer_event["event_id"]
-
-            if composer_event.get("kind") == "text":
-                question = (composer_event.get("text") or "").strip()
-                if question:
-                    question_language = detect_language_from_text(question)
-
-            elif composer_event.get("kind") == "audio":
+        # A completed recording is transcribed automatically and sent through
+        # the exact same RAG + Tavily answer pipeline as typed questions.
+        if voice_audio and voice_audio.get("bytes"):
+            voice_signature = hashlib.sha256(voice_audio["bytes"]).hexdigest()
+            if voice_signature != st.session_state.last_voice_signature:
                 try:
                     with st.spinner("Understanding your voice question..."):
-                        audio_data = base64.b64decode(composer_event.get("audio", ""))
-                        question, question_language = transcribe_voice(
-                            audio_data, composer_event.get("mime", "audio/webm")
-                        )
+                        question, question_language = transcribe_voice(voice_audio["bytes"])
+                    st.session_state.last_voice_signature = voice_signature
                 except Exception as error:
                     st.error(f"Voice input failed: {error}")
                     question = None
+
+        if question and question_language == "en":
+            question_language = detect_language_from_text(question)
 
         # if st.session_state.vector_store is not None:
         #     st.caption(f"🟢 Knowledge base ready · {len(get_sources())} source(s)")
