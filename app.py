@@ -1389,14 +1389,7 @@ Answer using the available evidence. Do not invent missing information.
                     st.markdown(answer)
                     if answer_audio:
                         render_speaker_button(answer_audio, "latest-answer")
-                    # # Save answer and audio in chat history.
-                    # st.session_state.messages.append({
-                    #     "role": "assistant",
-                    #     "content": answer,
-                    #     "sources": sources_for_answer,
-                    #     "audio": answer_audio,
-                    })
-                    # Save answer and audio in chat history.
+                
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": answer,
