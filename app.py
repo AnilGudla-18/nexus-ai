@@ -1,13 +1,19 @@
-import os
-import base64
-import asyncio
-import tempfile
 from pathlib import Path
+import os
+import asyncio
+import io
+import base64
 import streamlit as st
 from groq import Groq
 import edge_tts
 
 BASE_DIR = Path(__file__).resolve().parent
+
+# Custom chat composer: text field, microphone, and send button in one bar.
+nexus_composer = st.components.v1.declare_component(
+    "nexus_composer",
+    path=str(BASE_DIR / "nexus_composer"),
+)
 
 GROQ_API_KEY = st.secrets.get(
     "GROQ_API_KEY", os.getenv("GROQ_API_KEY", "")
@@ -22,6 +28,7 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 GROQ_MODEL = "openai/gpt-oss-120b"
 
 # TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+import tempfile
 import hashlib
 import uuid
 import re
@@ -31,6 +38,8 @@ from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 from urllib.parse import quote_plus
 
+import streamlit as st
+from groq import Groq
 from tavily import TavilyClient
 
 
@@ -56,109 +65,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-BASE_DIR = Path(__file__).resolve().parent
-CHROMA_DIR = str((BASE_DIR / ".." / "chroma_db").resolve())
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CHROMA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "chroma_db"))
 os.makedirs(CHROMA_DIR, exist_ok=True)
-
-# ============================================================
-# VOICE COMPONENT + MULTILINGUAL SPEECH HELPERS
-# ============================================================
-COMPONENT_DIR = BASE_DIR / "nexus_composer"
-COMPONENT_HTML = COMPONENT_DIR / "index.html"
-if not COMPONENT_HTML.is_file():
-    st.error(
-        "NEXUS AI microphone component is missing. Make sure the "
-        "nexus_composer/index.html file is committed to GitHub."
-    )
-    st.stop()
-
-nexus_composer = st.components.v1.declare_component(
-    "nexus_ai_inline_composer",
-    path=str(COMPONENT_DIR),
-)
-
-VOICE_BY_LANGUAGE = {
-    "en": "en-IN-NeerjaNeural",
-    "te": "te-IN-ShrutiNeural",
-    "hi": "hi-IN-SwaraNeural",
-    "ta": "ta-IN-PallaviNeural",
-    "kn": "kn-IN-SapnaNeural",
-    "ml": "ml-IN-SobhanaNeural",
-    "bn": "bn-IN-TanishaaNeural",
-    "gu": "gu-IN-DhwaniNeural",
-    "pa": "pa-IN-VaaniNeural",
-    "mr": "mr-IN-AarohiNeural",
-}
-
-
-def detect_answer_language(text):
-    """Detect common Indian-language scripts in the generated answer."""
-    text = text or ""
-    script_counts = {
-        "te": len(re.findall(r"[\u0C00-\u0C7F]", text)),
-        "hi": len(re.findall(r"[\u0900-\u097F]", text)),
-        "ta": len(re.findall(r"[\u0B80-\u0BFF]", text)),
-        "kn": len(re.findall(r"[\u0C80-\u0CFF]", text)),
-        "ml": len(re.findall(r"[\u0D00-\u0D7F]", text)),
-        "bn": len(re.findall(r"[\u0980-\u09FF]", text)),
-        "gu": len(re.findall(r"[\u0A80-\u0AFF]", text)),
-        "pa": len(re.findall(r"[\u0A00-\u0A7F]", text)),
-    }
-    best = max(script_counts, key=script_counts.get)
-    if script_counts[best] > 0:
-        return best
-    # Devanagari is shared by Hindi and Marathi; use the question's detected
-    # language when available, otherwise Hindi is the practical default.
-    return "en"
-
-
-def transcribe_voice(audio_b64):
-    """Transcribe browser-recorded audio using Groq Whisper auto language detection."""
-    if not groq_client:
-        raise RuntimeError("GROQ_API_KEY is missing. Add it to Streamlit Secrets.")
-    audio_bytes = base64.b64decode(audio_b64)
-    if not audio_bytes:
-        raise RuntimeError("No microphone audio was received.")
-    transcription = groq_client.audio.transcriptions.create(
-        file=("nexus_voice.webm", audio_bytes, "audio/webm"),
-        model="whisper-large-v3-turbo",
-        response_format="verbose_json",
-    )
-    transcript = (getattr(transcription, "text", "") or "").strip()
-    detected = getattr(transcription, "language", None)
-    if not transcript:
-        raise RuntimeError("I could not recognize speech. Please try again.")
-    return transcript, detected
-
-
-def make_speech_audio(text, language_code=None):
-    """Create an MP3 response using an Edge neural voice for the answer language."""
-    if not text or not text.strip():
-        return None
-    detected = detect_answer_language(text)
-    language_code = (language_code or detected or "en").lower().split("-")[0]
-    voice = VOICE_BY_LANGUAGE.get(language_code, VOICE_BY_LANGUAGE["en"])
-
-    async def _create():
-        communicate = edge_tts.Communicate(text, voice)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio:
-            temp_name = temp_audio.name
-        try:
-            await communicate.save(temp_name)
-            return Path(temp_name).read_bytes()
-        finally:
-            Path(temp_name).unlink(missing_ok=True)
-
-    try:
-        return asyncio.run(_create())
-    except RuntimeError:
-        # Handles environments where an event loop is already active.
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(_create())
-        finally:
-            loop.close()
-
 
 # Dark navy / blue UI based on your reference screenshot.
 st.markdown("""
@@ -318,6 +227,15 @@ div[data-testid="stAlert"] { border-radius: 12px; }
 .file-meta { color: #8daee8; font-size: .76rem; }
 .online { color: #35e0b0; font-size: .8rem; }
 footer { visibility: hidden; }
+/* Hide Streamlit deployment toolbar and GitHub badge */
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+.viewerBadge_container__1QSob {
+    display: none !important;
+    visibility: hidden !important;
+}
+#MainMenu { visibility: hidden !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -336,6 +254,91 @@ def ask_groq(messages, temperature=0.2):
     )
 
     return response.choices[0].message.content or ""
+
+
+def detect_language_from_text(text):
+    """Best-effort language detection for multilingual text and TTS."""
+    checks = [
+        ("te", r"[\u0c00-\u0c7f]"),  # Telugu
+        ("hi", r"[\u0900-\u097f]"),  # Devanagari (Hindi/Marathi)
+        ("ta", r"[\u0b80-\u0bff]"),  # Tamil
+        ("kn", r"[\u0c80-\u0cff]"),  # Kannada
+        ("ml", r"[\u0d00-\u0d7f]"),  # Malayalam
+        ("bn", r"[\u0980-\u09ff]"),  # Bengali
+        ("gu", r"[\u0a80-\u0aff]"),  # Gujarati
+        ("pa", r"[\u0a00-\u0a7f]"),  # Punjabi
+    ]
+    for code, pattern in checks:
+        if re.search(pattern, text or ""):
+            return code
+    return "en"
+
+
+TTS_VOICES = {
+    "en": "en-US-AriaNeural",
+    "te": "te-IN-ShrutiNeural",
+    "hi": "hi-IN-SwaraNeural",
+    "ta": "ta-IN-PallaviNeural",
+    "kn": "kn-IN-SapnaNeural",
+    "ml": "ml-IN-SobhanaNeural",
+    "bn": "bn-IN-TanishaaNeural",
+    "gu": "gu-IN-DhwaniNeural",
+    "pa": "pa-IN-VaaniNeural",
+    "mr": "mr-IN-AarohiNeural",
+}
+
+
+def make_speech_audio(text, language="en"):
+    """Convert an assistant answer to MP3 using the best matching language voice."""
+    # Prefer the language visible in the generated answer. This also fixes
+    # older chat messages that were saved without language metadata.
+    answer_language = detect_language_from_text(text)
+    if answer_language != "en":
+        # Devanagari is shared by Hindi and Marathi. Preserve Marathi when
+        # Whisper identified it; otherwise use the Hindi voice by default.
+        if answer_language == "hi" and language == "mr":
+            pass
+        else:
+            language = answer_language
+
+    async def create_audio(path):
+        voice = TTS_VOICES.get(language, TTS_VOICES["en"])
+        communicate = edge_tts.Communicate(text, voice=voice)
+        await communicate.save(path)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_file:
+        audio_path = audio_file.name
+    try:
+        asyncio.run(create_audio(audio_path))
+        with open(audio_path, "rb") as audio_file:
+            return audio_file.read()
+    finally:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+
+
+def transcribe_voice(audio_bytes, audio_mime="audio/webm"):
+    """Transcribe browser-recorded audio with Whisper and return text plus language."""
+    if groq_client is None:
+        raise ValueError("GROQ_API_KEY is not configured.")
+    audio_file = io.BytesIO(audio_bytes)
+    extension = "ogg" if "ogg" in (audio_mime or "") else "wav" if "wav" in (audio_mime or "") else "webm"
+    audio_file.name = f"nexus_voice.{extension}"
+    result = groq_client.audio.transcriptions.create(
+        model="whisper-large-v3-turbo",
+        file=audio_file,
+        response_format="verbose_json",
+    )
+    detected = (getattr(result, "language", None) or "english").lower()
+    language_aliases = {
+        "english": "en", "telugu": "te", "hindi": "hi", "tamil": "ta",
+        "kannada": "kn", "malayalam": "ml", "bengali": "bn",
+        "gujarati": "gu", "punjabi": "pa", "marathi": "mr",
+    }
+    language_code = language_aliases.get(detected, detected[:2])
+    return (result.text or "").strip(), language_code
+
+
 def prepare_chunks(chunks, source_name, source_type, source_id=None):
     """Attach source metadata and unique IDs to each chunk."""
     source_id = source_id or str(uuid.uuid4())
@@ -633,6 +636,10 @@ if "active_nav" not in st.session_state:
     st.session_state.active_nav = "AI Chat"
 if "show_knowledge_panel" not in st.session_state:
     st.session_state.show_knowledge_panel = False
+if "last_voice_signature" not in st.session_state:
+    st.session_state.last_voice_signature = None
+if "last_composer_event_id" not in st.session_state:
+    st.session_state.last_composer_event_id = None
 
 # Load the persistent Chroma collection after restart.
 if st.session_state.vector_store is None and os.path.isdir(CHROMA_DIR):
@@ -1069,17 +1076,21 @@ with main_col:
                 )
 
         else:
-            for message in st.session_state.messages:
+            for message_index, message in enumerate(st.session_state.messages):
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
-                    if message["role"] == "assistant" and message.get("audio"):
-                        st.audio(message["audio"], format="audio/mp3")
 
-                    # if message.get("sources"):
-                    #     with st.expander("View source pages"):
-                    #         for source in message["sources"]:
-                    #             st.markdown(f"**PDF page {source['page']}**")
-                    #             st.write(source["text"])
+                    if message["role"] == "assistant":
+                        if st.button("🔊 Listen to answer", key=f"speak_answer_{message_index}"):
+                            try:
+                                with st.spinner("Preparing voice answer..."):
+                                    message["audio_bytes"] = make_speech_audio(
+                                        message["content"], message.get("language", "en")
+                                    )
+                            except Exception as error:
+                                st.error(f"Voice output failed: {error}")
+                        if message.get("audio_bytes"):
+                            st.audio(message["audio_bytes"], format="audio/mp3")
 
         st.markdown(
             '<div style="text-align:center;color:#7695c8;'
@@ -1089,33 +1100,39 @@ with main_col:
             unsafe_allow_html=True,
         )
 
-        composer_key = st.session_state.get("composer_key", 0)
-        composer_value = nexus_composer(
+        # One integrated composer: text, microphone, and send are inside one bar.
+        composer_event = nexus_composer(
             placeholder="Ask NEXUS AI anything...",
-            send_label="Send",
-            mic_label="Record voice",
-            stop_label="Stop recording",
-            reset_token=composer_key,
-            key=f"nexus_inline_composer_{composer_key}",
+            key="nexus_chat_composer",
             default=None,
         )
 
         question = None
-        question_language = None
-        if isinstance(composer_value, dict):
-            if composer_value.get("kind") == "text":
-                question = (composer_value.get("text") or "").strip()
-            elif composer_value.get("kind") == "audio" and composer_value.get("audio"):
+        question_language = "en"
+
+        # Process each component event only once, even when Streamlit reruns.
+        if (
+            isinstance(composer_event, dict)
+            and composer_event.get("event_id")
+            and composer_event.get("event_id") != st.session_state.last_composer_event_id
+        ):
+            st.session_state.last_composer_event_id = composer_event["event_id"]
+
+            if composer_event.get("kind") == "text":
+                question = (composer_event.get("text") or "").strip()
+                if question:
+                    question_language = detect_language_from_text(question)
+
+            elif composer_event.get("kind") == "audio":
                 try:
-                    with st.spinner("Recognizing your speech..."):
-                        question, question_language = transcribe_voice(composer_value["audio"])
-                    st.session_state.last_voice_language = question_language
-                except Exception as voice_error:
-                    st.error(f"Voice input failed: {voice_error}")
-                
-            # A fresh component key clears the sent text/audio on the next rerun.
-            if question:
-                st.session_state.composer_key = composer_key + 1
+                    with st.spinner("Understanding your voice question..."):
+                        audio_data = base64.b64decode(composer_event.get("audio", ""))
+                        question, question_language = transcribe_voice(
+                            audio_data, composer_event.get("mime", "audio/webm")
+                        )
+                except Exception as error:
+                    st.error(f"Voice input failed: {error}")
+                    question = None
 
         # if st.session_state.vector_store is not None:
         #     st.caption(f"🟢 Knowledge base ready · {len(get_sources())} source(s)")
@@ -1124,7 +1141,7 @@ with main_col:
 
         if question:
             st.session_state.messages.append(
-                {"role": "user", "content": question}
+                {"role": "user", "content": question, "language": question_language}
             )
 
             with st.chat_message("user"):
@@ -1193,6 +1210,13 @@ with main_col:
                         system_prompt = """
 You are a helpful, intelligent, and professional AI assistant.
 
+LANGUAGE RULE: Reply in the same language as the user's latest question. If the
+user asks in Telugu, answer in natural Telugu. If the user asks in Hindi, answer
+in natural Hindi. Do the same for English, Tamil, Kannada, Malayalam, Bengali,
+Gujarati, Punjabi, Marathi, and other languages you understand. Do not switch to
+English unless the user asks for English. Keep names, technical terms, URLs, and
+code unchanged when appropriate.
+
 The application searches BOTH the user's local ChromaDB knowledge base
 and the public web for every question. The supplied context may contain
 local-document excerpts and web-search excerpts.
@@ -1212,11 +1236,7 @@ Rules:
    the supplied evidence supports that.
 10. Keep Google Maps behavior intact when the question asks for a location.
 Return only the answer the user needs.
-11. Reply in the same language used by the user. If the user asks in Telugu,
-    reply in natural Telugu; if Hindi, reply in natural Hindi; likewise for
-    English, Tamil, Kannada, Malayalam, Bengali, Gujarati, Punjabi, or Marathi.
-    Do not switch to English unless the user requests English.
-12. Never include a local document just because it shares a common
+11. Never include a local document just because it shares a common
     location, city, or generic word with the question.
 
 12. Identify the main entity and subject of the question.
@@ -1322,51 +1342,21 @@ Answer using the available evidence. Do not invent missing information.
                         if web_error:
                             st.caption(f"Web search note: {web_error}")
 
-                    # Generate spoken output in the answer's detected language.
-                    answer_audio = None
-                    try:
-                        with st.spinner("Preparing voice answer..."):
-                            answer_language = detect_answer_language(answer)
-                            if question_language:
-                                whisper_language = str(question_language).lower()
-                                if whisper_language.startswith("telugu"):
-                                    answer_language = "te"
-                                elif whisper_language.startswith("hindi"):
-                                    answer_language = "hi"
-                                elif whisper_language.startswith("marathi"):
-                                    answer_language = "mr"
-                                elif whisper_language.startswith("tamil"):
-                                    answer_language = "ta"
-                                elif whisper_language.startswith("kannada"):
-                                    answer_language = "kn"
-                                elif whisper_language.startswith("malayalam"):
-                                    answer_language = "ml"
-                                elif whisper_language.startswith("bengali"):
-                                    answer_language = "bn"
-                                elif whisper_language.startswith("gujarati"):
-                                    answer_language = "gu"
-                                elif whisper_language.startswith("punjabi"):
-                                    answer_language = "pa"
-                                elif whisper_language.startswith("english"):
-                                    answer_language = "en"
-                            answer_audio = make_speech_audio(answer, answer_language)
-                    except Exception as tts_error:
-                        st.warning(f"Voice output is unavailable: {tts_error}")
-
-                    # Display only the final AI answer.
-                    st.markdown(answer)
-                    if answer_audio:
-                        st.audio(answer_audio, format="audio/mp3")
-
-                    # Save answer and audio in chat history.
+                    # Save the answer. Rerun so the complete conversation is
+                    # rendered in order and the composer remains below it.
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": answer,
                         "sources": sources_for_answer,
-                        "audio": answer_audio,
+                        "language": question_language,
                     })
+                    st.rerun()
 
 
 
                 except Exception as error:
-                    st.error(f"Could not generate the answer: {error}")
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": f"I couldn't generate the answer: {error}",
+                    })
+                    st.rerun()
