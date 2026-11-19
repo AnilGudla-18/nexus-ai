@@ -6,8 +6,21 @@ from pathlib import Path
 import streamlit as st
 from groq import Groq
 import edge_tts
-unsafe_allow_html=True
+
+st.markdown(
+    """
+    <style>
+    .viewerBadge_container__1QSob,
+    .viewerBadge_link__1S137,
+    .viewerBadge_text__1JaDK,
+    [data-testid="stAppDeployButton"] {
+        display: none !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
+
 BASE_DIR = Path(__file__).resolve().parent
 
 GROQ_API_KEY = st.secrets.get(
