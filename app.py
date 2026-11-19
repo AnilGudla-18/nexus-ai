@@ -4,6 +4,16 @@ import asyncio
 import tempfile
 from pathlib import Path
 import streamlit as st
+st.markdown(
+    """
+    <style>
+    #GithubIcon {
+        display: none !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 from groq import Groq
 import edge_tts
 
@@ -68,7 +78,7 @@ COMPONENT_HTML = COMPONENT_DIR / "index.html"
 if not COMPONENT_HTML.is_file():
     st.error(
         "NEXUS AI microphone component is missing. Make sure the "
-        # "nexus_composer/index.html file is committed to GitHub."
+         "nexus_composer/index.html file is committed to GitHub."
     )
     st.stop()
 
