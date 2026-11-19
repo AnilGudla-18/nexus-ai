@@ -6,7 +6,7 @@ from pathlib import Path
 import streamlit as st
 from groq import Groq
 import edge_tts
-    unsafe_allow_html=True
+unsafe_allow_html=True
 )
 BASE_DIR = Path(__file__).resolve().parent
 
