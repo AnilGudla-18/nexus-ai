@@ -4,6 +4,8 @@ import asyncio
 import tempfile
 from pathlib import Path
 import streamlit as st
+from groq import Groq
+import edge_tts
 st.markdown(
     """
     <style>
@@ -14,9 +16,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-from groq import Groq
-import edge_tts
-
 BASE_DIR = Path(__file__).resolve().parent
 
 GROQ_API_KEY = st.secrets.get(
