@@ -9,8 +9,20 @@ import edge_tts
 st.markdown(
     """
     <style>
-    #GithubIcon {
+    
+st.markdown(
+    """
+    <style>
+    .viewerBadge_container__1QSob,
+    .viewerBadge_link__1S137,
+    .viewerBadge_text__1JaDK,
+    [data-testid="stAppDeployButton"] {
         display: none !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)       
     }
     </style>
     """,
